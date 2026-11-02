@@ -581,13 +581,23 @@ const K_BODY = {
     '~~-\' : : : : : :     __>',
     '    `-.________.-`-.__/ ',
   ],
-  roar: [
-    '                 _.--.  ',
-    '    _.-~~~~~~~-./ @  \\__',
-    '~~-\' : : : : : :    <   ',
-    '    `-.________.-`-.__\\_',
-  ],
 };
+// Roar pose: reared up on the hind legs, jaws open to the sky, tail braced on the ground
+const K_REAR = [
+  '               \\  /     ',
+  '               |@ |     ',
+  '              _/  \\     ',
+  '             / :  :|    ',
+  '            |  : : |\\_  ',
+  '            |  : : |    ',
+  '            |: : : |    ',
+  '             \\_:__/     ',
+  '  ~~-.________/ | |     ',
+  '              _| |_     ',
+];
+const K_JAW_COL = 16.5;         // column between the open jaws (facing right)
+const ROAR_FRAMES = 110;
+let flames = [];
 const K_LEGS = [
   ['      | |      | |       ', '     _|_|_    _|_|_      '],   // idle
   ['      / |      | \\       ', '     /_ |_    _| _\\      '],   // step A
@@ -662,7 +672,7 @@ function kaijuSprite() {
   const roaring = kaiju.roarT > 0;
   const moving = !roaring && kaiju.stepT > 0;
   const legs = moving ? K_LEGS[1 + (kaiju.step % 2)] : K_LEGS[0];
-  const rowsOut = [...(roaring ? K_BODY.roar : K_BODY.idle), legs[0], legs[1]]
+  const rowsOut = (roaring ? K_REAR : [...K_BODY.idle, legs[0], legs[1]])
     .map(s => s.padEnd(KAIJU_W).slice(0, KAIJU_W));
   return kaiju.dir === 1 ? rowsOut : rowsOut.map(mirrorRow);
 }
@@ -698,7 +708,24 @@ function updateKaiju() {
   }
 }
 
+function drawFlames() {
+  flames = flames.filter(f => {
+    f.y += f.vy; f.x += f.vx + Math.sin((frame + f.seed) * 0.3) * 0.08;
+    f.vy *= 0.985; f.life++;
+    const k = f.life / f.max;                       // 0 = fresh, 1 = burnt out
+    if (k >= 1 || f.y < 0) return false;
+    const col = k < 0.2 ? '255,236,170' : k < 0.5 ? '255,166,60' : k < 0.8 ? '248,81,73' : '120,40,30';
+    ctx.fillStyle = `rgba(${col},${1 - k * 0.85})`;
+    ctx.shadowColor = `rgb(${col})`; ctx.shadowBlur = k < 0.5 ? 10 : 4;
+    const ch = k < 0.25 ? '#' : k < 0.5 ? '*' : k < 0.75 ? '^' : '.';
+    ctx.fillText(ch, Math.round(f.x) * CHAR_W, Math.round(f.y) * CHAR_H);
+    return true;
+  });
+  ctx.shadowBlur = 0;
+}
+
 function drawKaiju() {
+  drawFlames();
   if (!kaiju.active) return;
   const sprite = kaijuSprite();
   const top = rows - 1 - sprite.length;
@@ -735,26 +762,27 @@ function drawKaiju() {
   });
   ctx.shadowBlur = 0;
 
-  // roar: sound rings out of the open jaw in the facing direction
-  if (roaring) {
-    const eyeRow = top + 2;
-    const phase = Math.floor((60 - kaiju.roarT) / 6);
-    const ring = kaiju.dir === 1 ? ')' : '(';
-    const base = kaiju.dir === 1 ? kx + KAIJU_W : kx - 1;
-    for (let k = 0; k < 4; k++) {
-      const off = (phase + k) % 6;
-      const cx = base + kaiju.dir * off * 2;
-      if (cx < 0 || cx >= cols) continue;
-      ctx.fillStyle = `rgba(248,81,73,${0.8 - off * 0.13})`;
-      ctx.fillText(ring, cx * CHAR_W, eyeRow * CHAR_H);
+  // roar: after a short wind-up, a fire plume pours out of the jaws into the sky
+  const elapsed = ROAR_FRAMES - kaiju.roarT;
+  if (roaring && elapsed > 12 && kaiju.roarT > 14) {
+    const jawX = kx + (kaiju.dir === 1 ? K_JAW_COL : KAIJU_W - 1 - K_JAW_COL);
+    for (let n = 0; n < 3; n++) {
+      flames.push({
+        x: jawX + (Math.random() - 0.5) * 1.5,
+        y: top - 0.5,
+        vx: (Math.random() - 0.5) * 0.18 + kaiju.dir * 0.03,
+        vy: -(0.45 + Math.random() * 0.4),
+        life: 0, max: 40 + Math.floor(Math.random() * 30),
+        seed: Math.random() * 100,
+      });
     }
   }
 }
 
 function kaijuRoar() {
   if (!kaiju.active || kaiju.roarT > 0) return;
-  kaiju.roarT = 60;
-  addLogLine('err', 'kaiju.roar → 140dB · windows rattling');
+  kaiju.roarT = ROAR_FRAMES;
+  addLogLine('err', 'kaiju.roar → 140dB · flame plume 300m · windows rattling');
 }
 
 function setKaiju(on) {
