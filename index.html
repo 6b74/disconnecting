@@ -571,18 +571,30 @@ let stars = [];
 let nextShootingStar = 0;
 let autoStars = true, shower = false, wishes = 0;
 
-// Kaiju: original sprite, 11 cols x 9 rows, feet sit just above the ground line
-const KAIJU_W = 11;
-const K_HEAD = ['     *     ', '     |     ', '  .-----.  '];
-const K_EYE  = { '1': '  |[  @]|  ', '-1': '  |[@  ]|  ' };
-const K_NECK = '  |_____|  ';
-const K_ARMS = { idle: ' /|=====|\\ ', up: ' \\|=====|/ ' };
-const K_BELLY = '  |=====|  ';
+// Kaiju: original giant monitor lizard, drawn facing right, mirrored for left.
+// 24 cols x 6 rows, feet sit just above the ground line
+const KAIJU_W = 24;
+const K_BODY = {
+  idle: [
+    '                 _.--.  ',
+    '    _.-~~~~~~~-./ @  \\_ ',
+    '~~-\' : : : : : :     __>',
+    '    `-.________.-`-.__/ ',
+  ],
+  roar: [
+    '                 _.--.  ',
+    '    _.-~~~~~~~-./ @  \\__',
+    '~~-\' : : : : : :    <   ',
+    '    `-.________.-`-.__\\_',
+  ],
+};
 const K_LEGS = [
-  ['   |   |   ', '  _|   |_  '],   // idle
-  ['   /   |   ', '  /_   |_  '],   // step A
-  ['   |   \\   ', '  _|   _\\  '],   // step B
+  ['      | |      | |       ', '     _|_|_    _|_|_      '],   // idle
+  ['      / |      | \\       ', '     /_ |_    _| _\\      '],   // step A
+  ['      | \\      / |       ', '     _| _\\    /_ |_      '],   // step B
 ];
+const K_MIRROR = { '/':'\\', '\\':'/', '<':'>', '>':'<', '(':')', ')':'(', '`':'\'', '\'':'`' };
+const mirrorRow = s => s.padEnd(KAIJU_W).slice(0, KAIJU_W).split('').reverse().map(c => K_MIRROR[c] || c).join('');
 const kaiju = {
   active:false, x:0, dir:1, target:null, input:0,
   wander:false, nextWander:0, step:0, stepT:0, roarT:0,
@@ -650,14 +662,9 @@ function kaijuSprite() {
   const roaring = kaiju.roarT > 0;
   const moving = !roaring && kaiju.stepT > 0;
   const legs = moving ? K_LEGS[1 + (kaiju.step % 2)] : K_LEGS[0];
-  return [
-    ...K_HEAD,
-    K_EYE[String(kaiju.dir)],
-    K_NECK,
-    roaring ? K_ARMS.up : K_ARMS.idle,
-    K_BELLY,
-    legs[0], legs[1],
-  ];
+  const rowsOut = [...(roaring ? K_BODY.roar : K_BODY.idle), legs[0], legs[1]]
+    .map(s => s.padEnd(KAIJU_W).slice(0, KAIJU_W));
+  return kaiju.dir === 1 ? rowsOut : rowsOut.map(mirrorRow);
 }
 
 function updateKaiju() {
@@ -714,9 +721,10 @@ function drawKaiju() {
       if (ch === '@') {
         ctx.fillStyle = roaring ? '#f85149' : '#d29922';
         ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
-      } else if (ch === '*') {
-        ctx.fillStyle = (frame >> 4) % 2 ? '#f85149' : '#3a1513';
-        ctx.shadowColor = '#f85149'; ctx.shadowBlur = (frame >> 4) % 2 ? 8 : 0;
+      } else if (ch === ':' || ch === '~') {
+        // scales and back ridge, a shade darker than the outline
+        ctx.fillStyle = '#39d353';
+        ctx.shadowColor = '#39d353'; ctx.shadowBlur = 2;
       } else {
         ctx.fillStyle = '#7ee787';
         ctx.shadowColor = '#7ee787'; ctx.shadowBlur = 4;
@@ -726,9 +734,9 @@ function drawKaiju() {
   });
   ctx.shadowBlur = 0;
 
-  // roar: sound rings out of the eye in the facing direction
+  // roar: sound rings out of the open jaw in the facing direction
   if (roaring) {
-    const eyeRow = top + 3;
+    const eyeRow = top + 2;
     const phase = Math.floor((60 - kaiju.roarT) / 6);
     const ring = kaiju.dir === 1 ? ')' : '(';
     const base = kaiju.dir === 1 ? kx + KAIJU_W : kx - 1;
@@ -758,12 +766,12 @@ function setKaiju(on) {
     kaiju.x = 0; kaiju.dir = 1; kaiju.roarT = 0;
     kaiju.target = Math.floor(cols * 0.3);
     threat.textContent = 'KAIJU'; threat.className = 'stat-v amber';
-    addLogLine('warn', 'contact → unit B-74 entering sector 1');
+    addLogLine('warn', 'contact → specimen B-74 entering sector 1');
   } else {
     kaiju.wander = false; kaiju.input = 0;
     document.getElementById('btn-wander').classList.remove('active');
     threat.textContent = 'MIDNIGHT'; threat.className = 'stat-v dim';
-    addLogLine('ok', 'unit B-74 → returned to sea · all clear');
+    addLogLine('ok', 'specimen B-74 → returned to sea · all clear');
   }
 }
 
