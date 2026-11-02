@@ -134,25 +134,8 @@ main.create-mode{grid-template-columns:1fr var(--seq-width, 620px)}
 /* ASCII PANEL */
 .ascii-panel{position:relative;overflow:hidden;background:var(--bg);display:flex;flex-direction:column}
 .ascii-wrap{flex:1;position:relative;overflow:hidden}
-canvas#city{display:block;position:absolute;bottom:0;left:0;cursor:crosshair}
+canvas#city{display:block;position:absolute;bottom:0;left:0}
 
-/* SCENE CONTROLS */
-.scene-ctl{
-  position:absolute;top:10px;left:12px;z-index:5;
-  display:flex;flex-direction:column;gap:6px;
-  background:rgba(10,13,10,.78);border:1px solid var(--border);
-  padding:8px 10px;border-radius:2px;
-  opacity:.5;transition:opacity .2s;
-}
-.scene-ctl:hover,.scene-ctl:focus-within{opacity:1}
-.ctl-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
-.ctl-lbl{font-size:10px;color:var(--text2);letter-spacing:.12em;text-transform:uppercase;min-width:46px}
-.ctl-hint{font-size:9px;color:var(--text4);letter-spacing:.04em}
-.btn:disabled{opacity:.35;cursor:default;border-color:var(--border2);color:var(--text3)}
-.scene-ctl.min .ctl-row:not(.ctl-head){display:none}
-.ctl-head{justify-content:space-between}
-.ctl-min{background:none;border:none;color:var(--text3);font-family:var(--mono);font-size:10px;cursor:pointer;padding:0 2px}
-.ctl-min:hover{color:var(--p)}
 canvas#rain{position:absolute;inset:0;pointer-events:none;opacity:.5}
 .waveform-wrap{
   padding:10px 16px;border-top:1px solid var(--border);
@@ -408,27 +391,6 @@ footer a:hover{color:var(--p)}
       <div class="ascii-wrap">
         <canvas id="rain"></canvas>
         <canvas id="city"></canvas>
-        <div class="scene-ctl" id="scene-ctl">
-          <div class="ctl-row ctl-head">
-            <span class="ctl-lbl">▸ scene.ctl</span>
-            <button class="ctl-min" id="ctl-min" title="minimize">[-]</button>
-          </div>
-          <div class="ctl-row">
-            <span class="ctl-lbl">stars</span>
-            <button class="btn" id="btn-wish" title="S">☄ wish</button>
-            <button class="btn active" id="btn-autostar">auto</button>
-            <button class="btn" id="btn-shower">shower</button>
-          </div>
-          <div class="ctl-row">
-            <span class="ctl-lbl">kaiju</span>
-            <button class="btn amber-btn" id="btn-summon" title="K">summon</button>
-            <button class="btn" id="btn-kleft" disabled>◂</button>
-            <button class="btn" id="btn-kright" disabled>▸</button>
-            <button class="btn" id="btn-wander" disabled>wander</button>
-            <button class="btn danger" id="btn-roar" title="R" disabled>roar</button>
-          </div>
-          <div class="ctl-row"><span class="ctl-hint">click sky = wish · click city = send kaiju · ← → walk · R roar · K summon</span></div>
-        </div>
       </div>
       <div class="waveform-wrap">
         <div class="waveform-label">▸ signal.waveform<span class="cursor"></span></div>
@@ -569,7 +531,7 @@ let moonX = 0, moonY = 0;
 let clouds = [];
 let stars = [];
 let nextShootingStar = 0;
-let autoStars = true, shower = false, wishes = 0;
+let wishes = 0;
 
 // Kaiju: original giant monitor lizard, drawn facing right, mirrored for left.
 // 24 cols x 6 rows, feet sit just above the ground line
@@ -606,8 +568,10 @@ const K_LEGS = [
 const K_MIRROR = { '/':'\\', '\\':'/', '<':'>', '>':'<', '(':')', ')':'(', '`':'\'', '\'':'`' };
 const mirrorRow = s => s.padEnd(KAIJU_W).slice(0, KAIJU_W).split('').reverse().map(c => K_MIRROR[c] || c).join('');
 const kaiju = {
-  active:false, x:0, dir:1, target:null, input:0,
+  active:false, x:0, dir:1, target:null,
   wander:false, nextWander:0, step:0, stepT:0, roarT:0,
+  offstage:false,      // allowed past the screen edges (entering or leaving)
+  leaving:false, pendingRoar:false, lastRoar:0,
 };
 
 function buildCity() {
@@ -641,7 +605,7 @@ function buildCity() {
   ];
 
   nextShootingStar = frame + 400 + Math.floor(Math.random() * 600);
-  kaiju.x = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x));
+  if (!kaiju.offstage) kaiju.x = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x));
 }
 
 function spawnShootingStar(col, row) {
@@ -677,21 +641,32 @@ function kaijuSprite() {
   return kaiju.dir === 1 ? rowsOut : rowsOut.map(mirrorRow);
 }
 
+const KAIJU_STAY = 60 * 90;   // ~90s after the last roar he heads back out
+
 function updateKaiju() {
   if (!kaiju.active) return;
   if (kaiju.roarT > 0) { kaiju.roarT--; kaiju.stepT = 0; return; }   // plants its feet to roar
 
+  // bored: walk off the nearest edge
+  if (!kaiju.leaving && !kaiju.offstage && frame - kaiju.lastRoar > KAIJU_STAY) {
+    kaiju.leaving = kaiju.offstage = true; kaiju.wander = false;
+    kaiju.target = kaiju.x + KAIJU_W / 2 < cols / 2 ? -KAIJU_W - 1 : cols + 1;
+  }
+
   let dir = 0;
-  if (kaiju.input) {
-    dir = kaiju.input; kaiju.target = null;
-  } else if (kaiju.target !== null) {
+  if (kaiju.target !== null) {
     const d = kaiju.target - kaiju.x;
     if (Math.abs(d) < 0.5) {
       kaiju.target = null;
-      if (kaiju.wander) {
-        kaiju.nextWander = frame + 120 + Math.floor(Math.random() * 360);
-        if (Math.random() < 0.15) kaijuRoar();
+      if (kaiju.leaving) { setKaiju(false); return; }
+      if (kaiju.offstage) {                  // finished walking on
+        kaiju.offstage = false; kaiju.wander = true;
+        kaiju.nextWander = frame + 120 + Math.floor(Math.random() * 240);
+        if (kaiju.pendingRoar) { kaiju.pendingRoar = false; kaijuRoar(); }
+        return;
       }
+      kaiju.nextWander = frame + 120 + Math.floor(Math.random() * 360);
+      if (Math.random() < 0.15) kaijuRoar();
     } else dir = Math.sign(d);
   } else if (kaiju.wander && frame >= kaiju.nextWander) {
     kaiju.target = Math.floor(Math.random() * Math.max(1, cols - KAIJU_W));
@@ -699,7 +674,9 @@ function updateKaiju() {
 
   if (dir) {
     kaiju.dir = dir;
-    const nx = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x + dir * 0.07));
+    const lo = kaiju.offstage ? -KAIJU_W - 1 : 0;
+    const hi = kaiju.offstage ? cols + 1 : cols - KAIJU_W;
+    const nx = Math.max(lo, Math.min(hi, kaiju.x + dir * 0.07));
     if (nx === kaiju.x) { kaiju.target = null; kaiju.stepT = 0; return; }   // hit the edge
     kaiju.x = nx;
     if (++kaiju.stepT % 12 === 0) kaiju.step++;
@@ -782,23 +759,22 @@ function drawKaiju() {
 function kaijuRoar() {
   if (!kaiju.active || kaiju.roarT > 0) return;
   kaiju.roarT = ROAR_FRAMES;
+  kaiju.lastRoar = frame;
   addLogLine('err', 'kaiju.roar → 140dB · flame plume 300m · windows rattling');
 }
 
 function setKaiju(on) {
   kaiju.active = on;
-  const summon = document.getElementById('btn-summon');
-  summon.textContent = on ? 'dismiss' : 'summon';
-  ['btn-kleft','btn-kright','btn-wander','btn-roar'].forEach(id => document.getElementById(id).disabled = !on);
   const threat = document.getElementById('sb-threat');
   if (on) {
-    kaiju.x = 0; kaiju.dir = 1; kaiju.roarT = 0;
-    kaiju.target = Math.floor(cols * 0.3);
+    kaiju.x = -KAIJU_W; kaiju.dir = 1; kaiju.roarT = 0;
+    kaiju.offstage = true; kaiju.leaving = false; kaiju.wander = false;
+    kaiju.target = Math.floor(cols * (0.2 + Math.random() * 0.3));
+    kaiju.lastRoar = frame;
     threat.textContent = 'KAIJU'; threat.className = 'stat-v amber';
     addLogLine('warn', 'contact → specimen B-74 entering sector 1');
   } else {
-    kaiju.wander = false; kaiju.input = 0;
-    document.getElementById('btn-wander').classList.remove('active');
+    kaiju.wander = kaiju.offstage = kaiju.leaving = kaiju.pendingRoar = false;
     threat.textContent = 'MIDNIGHT'; threat.className = 'stat-v dim';
     addLogLine('ok', 'specimen B-74 → returned to sea · all clear');
   }
@@ -846,12 +822,9 @@ function drawCity() {
   });
 
   // SHOOTING STARS
-  if (autoStars && !shower && frame >= nextShootingStar) {
+  if (frame >= nextShootingStar) {
     spawnShootingStar();
     nextShootingStar = frame + 540 + Math.floor(Math.random() * 800);
-  }
-  if (shower && frame % 10 === 0 && Math.random() < 0.55 && stars.length < 14) {
-    spawnShootingStar(Math.floor(Math.random() * cols * 0.85), Math.floor(Math.random() * rows * 0.35));
   }
 
   stars = stars.filter(s => {
@@ -920,71 +893,23 @@ function drawCity() {
   ctx.restore();
 }
 
-/* SCENE CONTROLS */
-(function() {
-  const $ = id => document.getElementById(id);
-
-  $('ctl-min').addEventListener('click', () => {
-    const box = $('scene-ctl');
-    box.classList.toggle('min');
-    $('ctl-min').textContent = box.classList.contains('min') ? '[+]' : '[-]';
-  });
-
-  $('btn-wish').addEventListener('click', () => makeWish());
-  $('btn-autostar').addEventListener('click', function() {
-    autoStars = !autoStars;
-    this.classList.toggle('active', autoStars);
-    if (autoStars) nextShootingStar = frame + 60;
-  });
-  $('btn-shower').addEventListener('click', function() {
-    shower = !shower;
-    this.classList.toggle('active', shower);
-    addLogLine(shower ? 'warn' : 'info', shower ? 'meteor.shower → INBOUND · look up' : 'meteor.shower → subsiding');
-  });
-
-  $('btn-summon').addEventListener('click', () => setKaiju(!kaiju.active));
-  $('btn-roar').addEventListener('click', kaijuRoar);
-  $('btn-wander').addEventListener('click', function() {
-    kaiju.wander = !kaiju.wander;
-    this.classList.toggle('active', kaiju.wander);
-    kaiju.nextWander = frame;
-  });
-
-  // hold-to-walk buttons
-  [['btn-kleft', -1], ['btn-kright', 1]].forEach(([id, d]) => {
-    const b = $(id);
-    b.addEventListener('pointerdown', e => { e.preventDefault(); kaiju.input = d; });
-    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
-      b.addEventListener(ev, () => { if (kaiju.input === d) kaiju.input = 0; }));
-  });
-
-  // click sky = wish, click city = send kaiju there
-  cityCanvas.addEventListener('click', e => {
-    const r = cityCanvas.getBoundingClientRect();
-    const col = Math.floor((e.clientX - r.left) / CHAR_W);
-    const row = Math.floor((e.clientY - r.top) / CHAR_H);
-    if (row < rows * 0.6) makeWish(col, row);
-    else if (kaiju.active) kaiju.target = Math.max(0, Math.min(cols - KAIJU_W, col - Math.floor(KAIJU_W / 2)));
-  });
-
-  // keyboard (listen mode only; create mode owns arrows/space)
-  const held = new Set();
-  document.addEventListener('keydown', e => {
-    if (currentMode !== 'listen' || e.target.tagName === 'INPUT' || e.repeat) return;
-    if (e.code === 'KeyK') setKaiju(!kaiju.active);
-    if (e.code === 'KeyS') makeWish();
-    if (!kaiju.active) return;
-    if (e.code === 'KeyR') kaijuRoar();
-    if (['ArrowLeft','KeyA'].includes(e.code))  { held.add(-1); kaiju.input = -1; e.preventDefault(); }
-    if (['ArrowRight','KeyD'].includes(e.code)) { held.add(1);  kaiju.input = 1;  e.preventDefault(); }
-  });
-  document.addEventListener('keyup', e => {
-    if (['ArrowLeft','KeyA'].includes(e.code))  held.delete(-1);
-    if (['ArrowRight','KeyD'].includes(e.code)) held.delete(1);
-    kaiju.input = held.has(kaiju.input) ? kaiju.input : (held.size ? [...held][0] : 0);
-  });
-  window.addEventListener('blur', () => { held.clear(); kaiju.input = 0; });
-})();
+/* EASTER EGGS: click the sky to wish, R wakes the kaiju */
+cityCanvas.addEventListener('click', e => {
+  const r = cityCanvas.getBoundingClientRect();
+  const col = Math.floor((e.clientX - r.left) / CHAR_W);
+  const row = Math.floor((e.clientY - r.top) / CHAR_H);
+  if (row < rows * 0.6) makeWish(col, row);
+});
+document.addEventListener('keydown', e => {
+  if (currentMode !== 'listen' || e.target.tagName === 'INPUT' || e.repeat || e.code !== 'KeyR') return;
+  if (!kaiju.active) { setKaiju(true); kaiju.pendingRoar = true; }
+  else if (kaiju.offstage && !kaiju.leaving) kaiju.pendingRoar = true;   // still walking on
+  else if (kaiju.leaving) {                                              // called back on his way out
+    kaiju.leaving = false; kaiju.pendingRoar = true;
+    kaiju.target = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x));
+  }
+  else kaijuRoar();
+});
 
 /* RAIN */
 const rainCanvas = document.getElementById('rain');
