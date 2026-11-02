@@ -722,12 +722,13 @@ function drawKaiju() {
         ctx.fillStyle = roaring ? '#f85149' : '#d29922';
         ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
       } else if (ch === ':' || ch === '~') {
-        // scales and back ridge, a shade darker than the outline
-        ctx.fillStyle = '#39d353';
-        ctx.shadowColor = '#39d353'; ctx.shadowBlur = 2;
+        // scales and back ridge, a shade dimmer than the outline
+        ctx.fillStyle = '#b8c4b8';
+        ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 2;
       } else {
-        ctx.fillStyle = '#7ee787';
-        ctx.shadowColor = '#7ee787'; ctx.shadowBlur = 4;
+        // white so it reads against the green skyline
+        ctx.fillStyle = '#f2f6f2';
+        ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 6;
       }
       ctx.fillText(ch, cx * CHAR_W, y * CHAR_H);
     }
