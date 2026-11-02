@@ -134,7 +134,25 @@ main.create-mode{grid-template-columns:1fr var(--seq-width, 620px)}
 /* ASCII PANEL */
 .ascii-panel{position:relative;overflow:hidden;background:var(--bg);display:flex;flex-direction:column}
 .ascii-wrap{flex:1;position:relative;overflow:hidden}
-canvas#city{display:block;position:absolute;bottom:0;left:0}
+canvas#city{display:block;position:absolute;bottom:0;left:0;cursor:crosshair}
+
+/* SCENE CONTROLS */
+.scene-ctl{
+  position:absolute;top:10px;left:12px;z-index:5;
+  display:flex;flex-direction:column;gap:6px;
+  background:rgba(10,13,10,.78);border:1px solid var(--border);
+  padding:8px 10px;border-radius:2px;
+  opacity:.5;transition:opacity .2s;
+}
+.scene-ctl:hover,.scene-ctl:focus-within{opacity:1}
+.ctl-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.ctl-lbl{font-size:10px;color:var(--text2);letter-spacing:.12em;text-transform:uppercase;min-width:46px}
+.ctl-hint{font-size:9px;color:var(--text4);letter-spacing:.04em}
+.btn:disabled{opacity:.35;cursor:default;border-color:var(--border2);color:var(--text3)}
+.scene-ctl.min .ctl-row:not(.ctl-head){display:none}
+.ctl-head{justify-content:space-between}
+.ctl-min{background:none;border:none;color:var(--text3);font-family:var(--mono);font-size:10px;cursor:pointer;padding:0 2px}
+.ctl-min:hover{color:var(--p)}
 canvas#rain{position:absolute;inset:0;pointer-events:none;opacity:.5}
 .waveform-wrap{
   padding:10px 16px;border-top:1px solid var(--border);
@@ -390,6 +408,27 @@ footer a:hover{color:var(--p)}
       <div class="ascii-wrap">
         <canvas id="rain"></canvas>
         <canvas id="city"></canvas>
+        <div class="scene-ctl" id="scene-ctl">
+          <div class="ctl-row ctl-head">
+            <span class="ctl-lbl">▸ scene.ctl</span>
+            <button class="ctl-min" id="ctl-min" title="minimize">[-]</button>
+          </div>
+          <div class="ctl-row">
+            <span class="ctl-lbl">stars</span>
+            <button class="btn" id="btn-wish" title="S">☄ wish</button>
+            <button class="btn active" id="btn-autostar">auto</button>
+            <button class="btn" id="btn-shower">shower</button>
+          </div>
+          <div class="ctl-row">
+            <span class="ctl-lbl">kaiju</span>
+            <button class="btn amber-btn" id="btn-summon" title="K">summon</button>
+            <button class="btn" id="btn-kleft" disabled>◂</button>
+            <button class="btn" id="btn-kright" disabled>▸</button>
+            <button class="btn" id="btn-wander" disabled>wander</button>
+            <button class="btn danger" id="btn-roar" title="R" disabled>roar</button>
+          </div>
+          <div class="ctl-row"><span class="ctl-hint">click sky = wish · click city = send kaiju · ← → walk · R roar · K summon</span></div>
+        </div>
       </div>
       <div class="waveform-wrap">
         <div class="waveform-label">▸ signal.waveform<span class="cursor"></span></div>
@@ -419,7 +458,8 @@ footer a:hover{color:var(--p)}
         <div class="stat-row"><span class="stat-k">stream</span><span class="stat-v">ACTIVE</span></div>
         <div class="stat-row"><span class="stat-k">uptime</span><span class="stat-v f-uptime" id="sb-uptime">00:00:00</span></div>
         <div class="stat-row"><span class="stat-k">rain</span><span class="stat-v amber">HEAVY</span></div>
-        <div class="stat-row"><span class="stat-k">threat lvl</span><span class="stat-v dim">MIDNIGHT</span></div>
+        <div class="stat-row"><span class="stat-k">wishes</span><span class="stat-v" id="sb-wishes">0</span></div>
+        <div class="stat-row"><span class="stat-k">threat lvl</span><span class="stat-v dim" id="sb-threat">MIDNIGHT</span></div>
       </div>
       <div class="log-wrap">
         <div class="sb-title">▸ event.log</div>
@@ -527,8 +567,38 @@ let cols, rows, buildings = [], frame = 0;
 // Sky elements
 let moonX = 0, moonY = 0;
 let clouds = [];
-let shootingStar = null;
+let stars = [];
 let nextShootingStar = 0;
+let autoStars = true, shower = false, wishes = 0;
+
+// Kaiju: original giant monitor lizard, drawn facing right, mirrored for left.
+// 24 cols x 6 rows, feet sit just above the ground line
+const KAIJU_W = 24;
+const K_BODY = {
+  idle: [
+    '                 _.--.  ',
+    '    _.-~~~~~~~-./ @  \\_ ',
+    '~~-\' : : : : : :     __>',
+    '    `-.________.-`-.__/ ',
+  ],
+  roar: [
+    '                 _.--.  ',
+    '    _.-~~~~~~~-./ @  \\__',
+    '~~-\' : : : : : :    <   ',
+    '    `-.________.-`-.__\\_',
+  ],
+};
+const K_LEGS = [
+  ['      | |      | |       ', '     _|_|_    _|_|_      '],   // idle
+  ['      / |      | \\       ', '     /_ |_    _| _\\      '],   // step A
+  ['      | \\      / |       ', '     _| _\\    /_ |_      '],   // step B
+];
+const K_MIRROR = { '/':'\\', '\\':'/', '<':'>', '>':'<', '(':')', ')':'(', '`':'\'', '\'':'`' };
+const mirrorRow = s => s.padEnd(KAIJU_W).slice(0, KAIJU_W).split('').reverse().map(c => K_MIRROR[c] || c).join('');
+const kaiju = {
+  active:false, x:0, dir:1, target:null, input:0,
+  wander:false, nextWander:0, step:0, stepT:0, roarT:0,
+};
 
 function buildCity() {
   const wrap = cityCanvas.parentElement;
@@ -561,26 +631,156 @@ function buildCity() {
   ];
 
   nextShootingStar = frame + 400 + Math.floor(Math.random() * 600);
+  kaiju.x = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x));
 }
 
-function spawnShootingStar() {
-  // starts upper-left area, travels diagonally down-right
-  const startCol = Math.floor(Math.random() * (cols * 0.5));
-  const startRow = Math.floor(Math.random() * (rows * 0.3));
-  shootingStar = {
+function spawnShootingStar(col, row) {
+  // default: starts upper-left area, travels diagonally down-right
+  const startCol = col ?? Math.floor(Math.random() * (cols * 0.5));
+  const startRow = row ?? Math.floor(Math.random() * (rows * 0.3));
+  const spd = 0.85 + Math.random() * 0.4;
+  stars.push({
     x: startCol,
     y: startRow,
-    dx: 0.18,   // cols per frame
-    dy: 0.08,   // rows per frame
+    dx: 0.18 * spd,   // cols per frame
+    dy: 0.08 * spd,   // rows per frame
     life: 0,
-    maxLife: 38,
+    maxLife: 38 + Math.floor(Math.random() * 16),
     tail: [],
-  };
+  });
+}
+
+function makeWish(col, row) {
+  spawnShootingStar(col, row);
+  wishes++;
+  document.getElementById('sb-wishes').textContent = wishes;
+  if (wishes === 1 || wishes % 5 === 0) addLogLine('ok', `wish.registered → #${wishes} · queued for delivery`);
+}
+
+/* KAIJU */
+function kaijuSprite() {
+  const roaring = kaiju.roarT > 0;
+  const moving = !roaring && kaiju.stepT > 0;
+  const legs = moving ? K_LEGS[1 + (kaiju.step % 2)] : K_LEGS[0];
+  const rowsOut = [...(roaring ? K_BODY.roar : K_BODY.idle), legs[0], legs[1]]
+    .map(s => s.padEnd(KAIJU_W).slice(0, KAIJU_W));
+  return kaiju.dir === 1 ? rowsOut : rowsOut.map(mirrorRow);
+}
+
+function updateKaiju() {
+  if (!kaiju.active) return;
+  if (kaiju.roarT > 0) { kaiju.roarT--; kaiju.stepT = 0; return; }   // plants its feet to roar
+
+  let dir = 0;
+  if (kaiju.input) {
+    dir = kaiju.input; kaiju.target = null;
+  } else if (kaiju.target !== null) {
+    const d = kaiju.target - kaiju.x;
+    if (Math.abs(d) < 0.5) {
+      kaiju.target = null;
+      if (kaiju.wander) {
+        kaiju.nextWander = frame + 120 + Math.floor(Math.random() * 360);
+        if (Math.random() < 0.15) kaijuRoar();
+      }
+    } else dir = Math.sign(d);
+  } else if (kaiju.wander && frame >= kaiju.nextWander) {
+    kaiju.target = Math.floor(Math.random() * Math.max(1, cols - KAIJU_W));
+  }
+
+  if (dir) {
+    kaiju.dir = dir;
+    const nx = Math.max(0, Math.min(cols - KAIJU_W, kaiju.x + dir * 0.07));
+    if (nx === kaiju.x) { kaiju.target = null; kaiju.stepT = 0; return; }   // hit the edge
+    kaiju.x = nx;
+    if (++kaiju.stepT % 12 === 0) kaiju.step++;
+  } else {
+    kaiju.stepT = 0;
+  }
+}
+
+function drawKaiju() {
+  if (!kaiju.active) return;
+  const sprite = kaijuSprite();
+  const top = rows - 1 - sprite.length;
+  const kx = Math.round(kaiju.x);
+  const roaring = kaiju.roarT > 0;
+
+  sprite.forEach((line, r) => {
+    const y = top + r;
+    const first = line.search(/\S/);
+    if (first < 0) return;
+    const last = line.length - 1 - line.split('').reverse().join('').search(/\S/);
+    // occlude buildings behind the silhouette
+    ctx.fillStyle = '#060806';
+    ctx.fillRect((kx + first) * CHAR_W, y * CHAR_H, (last - first + 1) * CHAR_W, CHAR_H);
+
+    for (let i = first; i <= last; i++) {
+      const ch = line[i];
+      const cx = kx + i;
+      if (ch === ' ' || cx < 0 || cx >= cols) continue;
+      if (ch === '@') {
+        ctx.fillStyle = roaring ? '#f85149' : '#d29922';
+        ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
+      } else if (ch === ':' || ch === '~') {
+        // scales and back ridge, a shade dimmer than the outline
+        ctx.fillStyle = '#b8c4b8';
+        ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 2;
+      } else {
+        // white so it reads against the green skyline
+        ctx.fillStyle = '#f2f6f2';
+        ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 6;
+      }
+      ctx.fillText(ch, cx * CHAR_W, y * CHAR_H);
+    }
+  });
+  ctx.shadowBlur = 0;
+
+  // roar: sound rings out of the open jaw in the facing direction
+  if (roaring) {
+    const eyeRow = top + 2;
+    const phase = Math.floor((60 - kaiju.roarT) / 6);
+    const ring = kaiju.dir === 1 ? ')' : '(';
+    const base = kaiju.dir === 1 ? kx + KAIJU_W : kx - 1;
+    for (let k = 0; k < 4; k++) {
+      const off = (phase + k) % 6;
+      const cx = base + kaiju.dir * off * 2;
+      if (cx < 0 || cx >= cols) continue;
+      ctx.fillStyle = `rgba(248,81,73,${0.8 - off * 0.13})`;
+      ctx.fillText(ring, cx * CHAR_W, eyeRow * CHAR_H);
+    }
+  }
+}
+
+function kaijuRoar() {
+  if (!kaiju.active || kaiju.roarT > 0) return;
+  kaiju.roarT = 60;
+  addLogLine('err', 'kaiju.roar → 140dB · windows rattling');
+}
+
+function setKaiju(on) {
+  kaiju.active = on;
+  const summon = document.getElementById('btn-summon');
+  summon.textContent = on ? 'dismiss' : 'summon';
+  ['btn-kleft','btn-kright','btn-wander','btn-roar'].forEach(id => document.getElementById(id).disabled = !on);
+  const threat = document.getElementById('sb-threat');
+  if (on) {
+    kaiju.x = 0; kaiju.dir = 1; kaiju.roarT = 0;
+    kaiju.target = Math.floor(cols * 0.3);
+    threat.textContent = 'KAIJU'; threat.className = 'stat-v amber';
+    addLogLine('warn', 'contact → specimen B-74 entering sector 1');
+  } else {
+    kaiju.wander = false; kaiju.input = 0;
+    document.getElementById('btn-wander').classList.remove('active');
+    threat.textContent = 'MIDNIGHT'; threat.className = 'stat-v dim';
+    addLogLine('ok', 'specimen B-74 → returned to sea · all clear');
+  }
 }
 
 function drawCity() {
+  ctx.save();
+  if (kaiju.roarT > 0) ctx.translate((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 3);
   ctx.fillStyle = '#060806';
-  ctx.fillRect(0, 0, cityCanvas.width, cityCanvas.height);
+  ctx.fillRect(-10, -10, cityCanvas.width + 20, cityCanvas.height + 20);
   ctx.font = `${CHAR_H}px VT323, monospace`;
   ctx.textBaseline = 'top';
 
@@ -617,34 +817,34 @@ function drawCity() {
     }
   });
 
-  // SHOOTING STAR
-  if (frame >= nextShootingStar && !shootingStar) {
+  // SHOOTING STARS
+  if (autoStars && !shower && frame >= nextShootingStar) {
     spawnShootingStar();
+    nextShootingStar = frame + 540 + Math.floor(Math.random() * 800);
+  }
+  if (shower && frame % 10 === 0 && Math.random() < 0.55 && stars.length < 14) {
+    spawnShootingStar(Math.floor(Math.random() * cols * 0.85), Math.floor(Math.random() * rows * 0.35));
   }
 
-  if (shootingStar) {
-    shootingStar.x += shootingStar.dx;
-    shootingStar.y += shootingStar.dy;
-    shootingStar.life++;
+  stars = stars.filter(s => {
+    s.x += s.dx;
+    s.y += s.dy;
+    s.life++;
 
     // tail positions
-    shootingStar.tail.push({ x: shootingStar.x, y: shootingStar.y });
-    if (shootingStar.tail.length > 7) shootingStar.tail.shift();
+    s.tail.push({ x: s.x, y: s.y });
+    if (s.tail.length > 7) s.tail.shift();
 
     // draw tail fading out
-    shootingStar.tail.forEach((pos, i) => {
-      const alpha = (i / shootingStar.tail.length) * 0.7;
+    s.tail.forEach((pos, i) => {
+      const alpha = (i / s.tail.length) * 0.7;
       ctx.fillStyle = `rgba(200,240,200,${alpha})`;
-      const ch = i === shootingStar.tail.length - 1 ? '*' : '.';
+      const ch = i === s.tail.length - 1 ? '*' : '.';
       ctx.fillText(ch, Math.floor(pos.x) * CHAR_W, Math.floor(pos.y) * CHAR_H);
     });
 
-    if (shootingStar.life >= shootingStar.maxLife ||
-        shootingStar.x >= cols || shootingStar.y >= rows * 0.6) {
-      shootingStar = null;
-      nextShootingStar = frame + 500 + Math.floor(Math.random() * 800);
-    }
-  }
+    return s.life < s.maxLife && s.x < cols && s.y < rows * 0.6;
+  });
 
   // CITY BUILDINGS - bottom 25%
   buildings.forEach(b => {
@@ -669,7 +869,7 @@ function drawCity() {
 
         if (bx > b.x && bx < b.x+b.w-1 && (bx+by)%2===0) {
           const flicker = (frame + bx*7 + by*13) % 200;
-          const off = flicker < 4 && Math.random() > 0.6;
+          const off = (flicker < 4 && Math.random() > 0.6) || (kaiju.roarT > 0 && Math.random() < 0.35);
           if (off) { ctx.fillStyle = '#0d2e15'; }
           else { ctx.fillStyle = (by-(rows-b.h))%4 < 2 ? '#39d353' : '#1a5c2a'; }
           ctx.fillText('|', bx*CHAR_W, by*CHAR_H); continue;
@@ -686,7 +886,77 @@ function drawCity() {
   for (let gx = 0; gx < cols; gx++) {
     ctx.fillText('_', gx*CHAR_W, (rows-1)*CHAR_H);
   }
+
+  updateKaiju();
+  drawKaiju();
+  ctx.restore();
 }
+
+/* SCENE CONTROLS */
+(function() {
+  const $ = id => document.getElementById(id);
+
+  $('ctl-min').addEventListener('click', () => {
+    const box = $('scene-ctl');
+    box.classList.toggle('min');
+    $('ctl-min').textContent = box.classList.contains('min') ? '[+]' : '[-]';
+  });
+
+  $('btn-wish').addEventListener('click', () => makeWish());
+  $('btn-autostar').addEventListener('click', function() {
+    autoStars = !autoStars;
+    this.classList.toggle('active', autoStars);
+    if (autoStars) nextShootingStar = frame + 60;
+  });
+  $('btn-shower').addEventListener('click', function() {
+    shower = !shower;
+    this.classList.toggle('active', shower);
+    addLogLine(shower ? 'warn' : 'info', shower ? 'meteor.shower → INBOUND · look up' : 'meteor.shower → subsiding');
+  });
+
+  $('btn-summon').addEventListener('click', () => setKaiju(!kaiju.active));
+  $('btn-roar').addEventListener('click', kaijuRoar);
+  $('btn-wander').addEventListener('click', function() {
+    kaiju.wander = !kaiju.wander;
+    this.classList.toggle('active', kaiju.wander);
+    kaiju.nextWander = frame;
+  });
+
+  // hold-to-walk buttons
+  [['btn-kleft', -1], ['btn-kright', 1]].forEach(([id, d]) => {
+    const b = $(id);
+    b.addEventListener('pointerdown', e => { e.preventDefault(); kaiju.input = d; });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
+      b.addEventListener(ev, () => { if (kaiju.input === d) kaiju.input = 0; }));
+  });
+
+  // click sky = wish, click city = send kaiju there
+  cityCanvas.addEventListener('click', e => {
+    const r = cityCanvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - r.left) / CHAR_W);
+    const row = Math.floor((e.clientY - r.top) / CHAR_H);
+    if (row < rows * 0.6) makeWish(col, row);
+    else if (kaiju.active) kaiju.target = Math.max(0, Math.min(cols - KAIJU_W, col - Math.floor(KAIJU_W / 2)));
+  });
+
+  // keyboard (listen mode only; create mode owns arrows/space)
+  const held = new Set();
+  document.addEventListener('keydown', e => {
+    if (currentMode !== 'listen' || e.target.tagName === 'INPUT' || e.repeat) return;
+    if (e.code === 'KeyK') setKaiju(!kaiju.active);
+    if (e.code === 'KeyS') makeWish();
+    if (!kaiju.active) return;
+    if (e.code === 'KeyR') kaijuRoar();
+    if (['ArrowLeft','KeyA'].includes(e.code))  { held.add(-1); kaiju.input = -1; e.preventDefault(); }
+    if (['ArrowRight','KeyD'].includes(e.code)) { held.add(1);  kaiju.input = 1;  e.preventDefault(); }
+  });
+  document.addEventListener('keyup', e => {
+    if (['ArrowLeft','KeyA'].includes(e.code))  held.delete(-1);
+    if (['ArrowRight','KeyD'].includes(e.code)) held.delete(1);
+    kaiju.input = held.has(kaiju.input) ? kaiju.input : (held.size ? [...held][0] : 0);
+  });
+  window.addEventListener('blur', () => { held.clear(); kaiju.input = 0; });
+})();
 
 /* RAIN */
 const rainCanvas = document.getElementById('rain');
@@ -751,22 +1021,22 @@ const LOG_LINES = [
   {c:'ok',  m:'connection.established · handshake complete'},
   {c:'ok',  m:'signal.lock confirmed · transmitting'},
   {c:'info',m:'rain.sensor → HEAVY · visibility reduced'},
-  {c:'ok',  m:'keepalive → pong 12ms'},
+  {c:'ok',  m:'keepalive → ping 12ms'},
   {c:'info',m:'cityscape.render → nominal'},
   {c:'ok',  m:'stream.health → all systems green'},
   {c:'info',m:'window.matrix → 847 units lit'},
   {c:'warn',m:'brief interference · self-corrected'},
   {c:'ok',  m:'uplink stable · latency 8ms'},
   {c:'info',m:'atmosphere.level → optimal'},
-  {c:'ok',  m:'keepalive → pong 9ms'},
+  {c:'ok',  m:'keepalive → ping 9ms'},
   {c:'info',m:'rain.intensity → increasing'},
   {c:'ok',  m:'signal.check → NOMINAL'},
   {c:'info',m:'antenna.status → operational'},
-  {c:'ok',  m:'keepalive → pong 11ms'},
+  {c:'ok',  m:'keepalive → ping 11ms'},
   {c:'warn',m:'packet drop 0.2% · within threshold'},
   {c:'ok',  m:'recovered · stream continuous'},
   {c:'info',m:'cityscape.lights → flickering sector 4'},
-  {c:'ok',  m:'keepalive → pong 14ms'},
+  {c:'ok',  m:'keepalive → ping 14ms'},
   {c:'info',m:'threat.level → LOW · all clear'},
   {c:'ok',  m:'transmission nominal · stay sharp'},
 ];
@@ -776,11 +1046,15 @@ const logScroll = document.getElementById('log-scroll');
 
 function addLog() {
   const e = LOG_LINES[logIdx++ % LOG_LINES.length];
+  addLogLine(e.c, e.m);
+}
+
+function addLogLine(c, m) {
   const now = new Date();
   const ts = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   const div = document.createElement('div');
   div.className = 'll';
-  div.innerHTML = `<span class="ts">${ts}</span><span class="${e.c}">${e.m}</span>`;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="${c}">${m}</span>`;
   logScroll.appendChild(div);
   while (logScroll.children.length > 40) logScroll.removeChild(logScroll.firstChild);
   logScroll.parentElement.scrollTop = logScroll.scrollHeight;
